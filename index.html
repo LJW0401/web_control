@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Web Control</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1b1d22; color: #eaeaea;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; user-select: none; }
+  .app { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 20px; height: 100%; padding: 20px; }
+  .panel { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .label { font-size: 14px; color: #9aa0a8; }
+  .value { font-size: 13px; color: #eaeaea; font-variant-numeric: tabular-nums; }
+
+  /* 摇杆 */
+  .joystick { position: relative; width: 260px; height: 260px;
+    background: #272a31; border: 2px solid #3a3f47; border-radius: 16px;
+    touch-action: none; }
+  .joystick .crosshair { position: absolute; inset: 0; pointer-events: none; }
+  .joystick .crosshair::before, .joystick .crosshair::after {
+    content: ""; position: absolute; background: #3a3f47; }
+  .joystick .crosshair::before { left: 50%; top: 0; bottom: 0; width: 1px; transform: translateX(-50%); }
+  .joystick .crosshair::after  { top: 50%; left: 0; right: 0; height: 1px; transform: translateY(-50%); }
+  .knob { position: absolute; width: 64px; height: 64px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #6fa8ff, #2f6fd6);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+    left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+
+  /* 横向滑块 */
+  .hslider { position: relative; width: 300px; height: 48px;
+    background: #272a31; border: 2px solid #3a3f47; border-radius: 24px;
+    touch-action: none; }
+  .hslider::before { content: ""; position: absolute; top: 50%; left: 0; right: 0;
+    height: 1px; background: #3a3f47; }
+  .hslider .thumb { position: absolute; top: 50%; width: 28px; height: 56px;
+    border-radius: 14px; transform: translate(-50%, -50%);
+    background: linear-gradient(90deg, #6fa8ff, #2f6fd6);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4); pointer-events: none; }
+
+  .status { position: fixed; left: 10px; bottom: 8px; font-size: 12px; color: #6f7681; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="panel">
+    <div class="label">腿长 · leg: <span id="vLeg">0.00</span></div>
+    <div id="legSlider" class="hslider"><div id="legThumb" class="thumb"></div></div>
+  </div>
+
+  <div class="panel">
+    <div class="label">摇杆 (速度 / Yaw)</div>
+    <div id="joystick" class="joystick">
+      <div class="crosshair"></div>
+      <div id="knob" class="knob"></div>
+    </div>
+    <div class="value">
+      speed: <span id="vSpeed">0.00</span>
+      &nbsp;&nbsp;yaw: <span id="vYaw">0.00</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="label">Pitch · pitch: <span id="vPitch">0.00</span></div>
+    <div id="pitchSlider" class="hslider"><div id="pitchThumb" class="thumb"></div></div>
+  </div>
+</div>
+<div id="status" class="status">loading...</div>
+
+<script>
+const state = { speed: 0, yaw: 0, leg: 0, pitch: 0 };
+
+/* ---------- 摇杆 (方形范围, x=yaw, y=speed) ---------- */
+(function () {
+  const pad = document.getElementById("joystick");
+  const knob = document.getElementById("knob");
+  let active = false, pid = null;
+
+  function setFromEvent(e) {
+    const rect = pad.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const halfW = rect.width / 2, halfH = rect.height / 2;
+    let dx = e.clientX - cx;
+    let dy = e.clientY - cy;
+    dx = Math.max(-halfW, Math.min(halfW, dx));
+    dy = Math.max(-halfH, Math.min(halfH, dy));
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    state.yaw = dx / halfW;           // [-1, 1]
+    state.speed = -dy / halfH;        // 上推为正
+    document.getElementById("vSpeed").textContent = state.speed.toFixed(2);
+    document.getElementById("vYaw").textContent = state.yaw.toFixed(2);
+  }
+  function reset() {
+    knob.style.transform = "translate(-50%, -50%)";
+    state.yaw = 0; state.speed = 0;
+    document.getElementById("vSpeed").textContent = "0.00";
+    document.getElementById("vYaw").textContent = "0.00";
+  }
+  pad.addEventListener("pointerdown", e => {
+    active = true; pid = e.pointerId;
+    pad.setPointerCapture(pid);
+    setFromEvent(e);
+  });
+  pad.addEventListener("pointermove", e => { if (active && e.pointerId === pid) setFromEvent(e); });
+  function end(e) {
+    if (!active || e.pointerId !== pid) return;
+    active = false;
+    try { pad.releasePointerCapture(pid); } catch(_) {}
+    reset();
+  }
+  pad.addEventListener("pointerup", end);
+  pad.addEventListener("pointercancel", end);
+})();
+
+/* ---------- 垂直滑块 ---------- */
+function setupHSlider(sliderId, thumbId, key, valueId) {
+  const el = document.getElementById(sliderId);
+  const thumb = document.getElementById(thumbId);
+  const valEl = document.getElementById(valueId);
+  let active = false, pid = null;
+
+  function setCenter(v) { // v in [-1, 1], 右 = +1
+    const rect = el.getBoundingClientRect();
+    const w = rect.width;
+    const left = (0.5 + v * 0.5) * w;
+    thumb.style.left = `${left}px`;
+    state[key] = v;
+    valEl.textContent = v.toFixed(2);
+  }
+  function fromEvent(e) {
+    const rect = el.getBoundingClientRect();
+    let x = e.clientX - rect.left;
+    x = Math.max(0, Math.min(rect.width, x));
+    const v = 2 * (x / rect.width) - 1;
+    setCenter(v);
+  }
+  el.addEventListener("pointerdown", e => {
+    active = true; pid = e.pointerId;
+    el.setPointerCapture(pid);
+    fromEvent(e);
+  });
+  el.addEventListener("pointermove", e => { if (active && e.pointerId === pid) fromEvent(e); });
+  function end(e) {
+    if (!active || e.pointerId !== pid) return;
+    active = false;
+    try { el.releasePointerCapture(pid); } catch(_) {}
+  }
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  // 初始居中
+  requestAnimationFrame(() => setCenter(0));
+}
+setupHSlider("legSlider", "legThumb", "leg", "vLeg");
+setupHSlider("pitchSlider", "pitchThumb", "pitch", "vPitch");
+
+/* ---------- 定时上报 ---------- */
+const statusEl = document.getElementById("status");
+async function send() {
+  try {
+    await fetch("/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+  } catch (e) { /* ignore */ }
+}
+fetch("/config").then(r => r.json()).then(cfg => {
+  const interval = Math.max(5, cfg.send_interval_ms | 0);
+  const hz = (1000 / interval).toFixed(1);
+  statusEl.textContent = `→ UDP ${cfg.output_host}:${cfg.output_port} @ ${hz}Hz`;
+  setInterval(send, interval);
+}).catch(() => {
+  statusEl.textContent = "config load failed, fallback 20Hz";
+  setInterval(send, 50);
+});
+</script>
+</body>
+</html>
